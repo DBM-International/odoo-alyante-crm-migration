@@ -42,6 +42,98 @@ class DbmImportWizard(models.TransientModel):
         help="Select the file encoding. Use 'Auto-detect' for automatic detection."
     )
 
+    def _log_import_error(self, error_type, message, details=None, row_number=None, import_type=None):
+        """
+        Log import errors to ir.logging table
+        """
+        try:
+            log_data = {
+                'name': f"DBM Import Error - {error_type}",
+                'level': 'ERROR',
+                'message': message,
+                'path': 'dbm.import.wizard',
+                'line': row_number or 0,
+                'func': f"_import_{import_type}" if import_type else "import_file",
+                'create_date': fields.Datetime.now(),
+                'create_uid': self.env.user.id,
+            }
+            
+            # Add additional details if provided
+            if details:
+                log_data['message'] += f" | Details: {details}"
+            
+            # Create the log entry
+            self.env['ir.logging'].create(log_data)
+            _logger.info(f"Error logged to ir.logging: {message}")
+            
+        except Exception as e:
+            # Fallback to standard logging if ir.logging fails
+            _logger.error(f"Failed to log to ir.logging: {str(e)} | Original error: {message}")
+
+    def _test_date_parsing(self, date_string):
+        """
+        Test function to verify date parsing works correctly
+        """
+        date_formats = [
+            '%d/%m/%Y %H:%M',      # 31/03/2024 1:00
+            '%d/%m/%Y %H:%M:%S',   # 31/03/2024 1:00:00
+            '%d/%m/%Y',            # 31/03/2024
+            '%Y-%m-%d %H:%M:%S',   # 2024-03-31 01:00:00
+            '%Y-%m-%d %H:%M',      # 2024-03-31 01:00
+            '%Y-%m-%d',            # 2024-03-31
+            '%d-%m-%Y %H:%M',      # 31-03-2024 1:00
+            '%d-%m-%Y',            # 31-03-2024
+        ]
+        
+        for date_format in date_formats:
+            try:
+                parsed_date = datetime.strptime(date_string, date_format)
+                result = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
+                _logger.info(f"Date '{date_string}' parsed successfully with format '{date_format}' -> '{result}'")
+                return result
+            except ValueError:
+                continue
+        
+        _logger.warning(f"Unable to parse date '{date_string}' with any supported format")
+        return None
+
+    def _test_project_creation(self):
+        """
+        Test function to verify project creation works
+        """
+        try:
+            _logger.info("Testing project creation...")
+            
+            # Check if project module is installed
+            project_module = self.env['ir.module.module'].search([('name', '=', 'project'), ('state', '=', 'installed')])
+            if not project_module:
+                _logger.error("Project module is not installed")
+                return False
+            
+            # Try to create a simple test project
+            test_data = {
+                'name': 'Test Project - DBM Import',
+                'code': 'TEST-DBM-001',
+                'type_dbm': 'GENERICO'
+            }
+            
+            _logger.info(f"Creating test project with data: {test_data}")
+            test_project = self.env['project.project'].create(test_data)
+            
+            if test_project.exists():
+                _logger.info(f"Test project created successfully - ID: {test_project.id}")
+                # Clean up - delete the test project
+                test_project.unlink()
+                _logger.info("Test project deleted successfully")
+                return True
+            else:
+                _logger.error("Test project creation failed")
+                return False
+                
+        except Exception as e:
+            _logger.error(f"Test project creation failed with error: {str(e)}")
+            return False
+
     @api.model
     def import_file(self, file_data, import_type):
         """
@@ -61,6 +153,9 @@ class DbmImportWizard(models.TransientModel):
         """
         Import partners from CSV file
         """
+        # Start a new transaction for this import
+        self.env.cr.commit()  # Commit any pending changes
+        
         try:
             # Decode the file
             file_content = base64.b64decode(file_data)
@@ -128,6 +223,9 @@ class DbmImportWizard(models.TransientModel):
             
             for row_num, row in enumerate(reader, start=2):  # Start from 2 if header exists
                 try:
+                    # Start a savepoint for each row
+                    savepoint = self.env.cr.savepoint()
+                    
                     partner_data = self._prepare_partner_data(row, field_mapping)
                     if partner_data:
                         result = self._create_or_update_partner(partner_data)
@@ -137,13 +235,29 @@ class DbmImportWizard(models.TransientModel):
                         elif result['action'] == 'updated':
                             updated_count += 1
                             updated_partners.append(f"{partner_data.get('name', 'N/A')} (Codice: {partner_data.get('ref', 'N/A')})")
+                    
+                    # Commit the savepoint if successful
+                    savepoint.close()
+                    
                 except Exception as e:
                     error_count += 1
                     partner_name = row.get('Nome Completo', 'N/A')
                     partner_code = row.get('Codice', 'N/A')
                     error_msg = f"Row {row_num} - {partner_name} (Codice: {partner_code}): {str(e)}"
                     errors.append(error_msg)
+                    
+                    # Log error to ir.logging
+                    self._log_import_error(
+                        error_type="Partner Import Row Error",
+                        message=error_msg,
+                        details=f"Partner: {partner_name}, Code: {partner_code}",
+                        row_number=row_num,
+                        import_type="partners"
+                    )
+                    
                     _logger.error(f"Error importing partner at row {row_num}: {str(e)}")
+
+                    continue
             
             # Update note with detailed results
             result_message = f"Import completed:\n"
@@ -194,7 +308,17 @@ class DbmImportWizard(models.TransientModel):
             }
             
         except Exception as e:
+            # Rollback the entire transaction on critical error
             error_msg = f"Error processing file: {str(e)}"
+            
+            # Log critical error to ir.logging
+            self._log_import_error(
+                error_type="Partner Import Critical Error",
+                message=error_msg,
+                details=f"File processing failed completely",
+                import_type="partners"
+            )
+            
             _logger.error(error_msg)
             raise UserError(error_msg)
 
@@ -202,6 +326,23 @@ class DbmImportWizard(models.TransientModel):
         """
         Import projects from CSV file
         """
+        # Start a new transaction for this import
+        
+        # Check if project module is installed
+        project_module = self.env['ir.module.module'].search([('name', '=', 'project'), ('state', '=', 'installed')])
+        if not project_module:
+            raise UserError("The 'project' module is not installed. Please install it first to import projects.")
+        
+        _logger.info("Project module is installed, proceeding with import")
+        
+        # Check existing projects count
+        existing_projects_count = self.env['project.project'].search_count([])
+        _logger.info(f"Current projects count in database: {existing_projects_count}")
+        
+        # Test project creation before starting import
+        if not self._test_project_creation():
+            raise UserError("Project creation test failed. Please check the logs for more details.")
+        
         try:
             # Decode the file
             file_content = base64.b64decode(file_data)
@@ -236,6 +377,7 @@ class DbmImportWizard(models.TransientModel):
                     csv_content = file_content.decode(self.file_encoding)
                     _logger.info(f"Successfully decoded file using user-selected encoding: {self.file_encoding}")
                 except UnicodeDecodeError as e:
+                    
                     raise UserError(f"Unable to decode the file using {self.file_encoding} encoding. Error: {str(e)}")
             
             # Parse CSV
@@ -250,7 +392,7 @@ class DbmImportWizard(models.TransientModel):
                 'Descrizione': 'description',
                 'Stato': 'stage_id',
                 'Tipologia': 'type_dbm',
-                'Priorità': 'priority',
+                #'Priorità': 'priority',
                 'CIG': 'cig',
                 'CUP': 'cup',
                 'Data fine effettiva': 'date',
@@ -266,6 +408,7 @@ class DbmImportWizard(models.TransientModel):
             
             for row_num, row in enumerate(reader, start=2):  # Start from 2 if header exists
                 try:
+                    
                     project_data = self._prepare_project_data(row, field_mapping)
                     if project_data:
                         result = self._create_or_update_project(project_data)
@@ -275,12 +418,25 @@ class DbmImportWizard(models.TransientModel):
                         elif result['action'] == 'updated':
                             updated_count += 1
                             updated_projects.append(f"{project_data.get('name', 'N/A')} (Codice: {project_data.get('code', 'N/A')})")
+                    
+                    
                 except Exception as e:
+                    
                     error_count += 1
                     project_name = row.get('Commessa', 'N/A')
                     project_code = row.get('Codice', 'N/A')
                     error_msg = f"Row {row_num} - {project_name} (Codice: {project_code}): {str(e)}"
                     errors.append(error_msg)
+                    
+                    # Log error to ir.logging
+                    self._log_import_error(
+                        error_type="Project Import Row Error",
+                        message=error_msg,
+                        details=f"Project: {project_name}, Code: {project_code}",
+                        row_number=row_num,
+                        import_type="projects"
+                    )
+                    
                     _logger.error(f"Error importing project at row {row_num}: {str(e)}")
             
             # Update note with detailed results
@@ -320,6 +476,10 @@ class DbmImportWizard(models.TransientModel):
             if error_count > 0:
                 notification_msg += f", Errori: {error_count}"
             
+
+            self.env.cr.commit()
+
+            
             return {
                 'type': 'ir.actions.client',
                 'tag': 'display_notification',
@@ -331,7 +491,17 @@ class DbmImportWizard(models.TransientModel):
             }
             
         except Exception as e:
+            # Rollback the entire transaction on critical error
             error_msg = f"Error processing file: {str(e)}"
+            
+            # Log critical error to ir.logging
+            self._log_import_error(
+                error_type="Project Import Critical Error",
+                message=error_msg,
+                details=f"File processing failed completely",
+                import_type="projects"
+            )
+            
             _logger.error(error_msg)
             raise UserError(error_msg)
 
@@ -398,11 +568,42 @@ class DbmImportWizard(models.TransientModel):
                 elif odoo_field == 'phone' and not partner_data.get('phone'):
                     partner_data['phone'] = value
         
-        # Set default values
-        if 'name' not in partner_data:
-            raise ValidationError("Partner name is required")
-        if 'ref' not in partner_data:
-            raise ValidationError("Codice is required")
+        # Set default values and validate required fields
+        if 'name' not in partner_data or not partner_data['name'].strip():
+            error_msg = "Partner name is required"
+            self._log_import_error(
+                error_type="Partner Validation Error",
+                message=error_msg,
+                details=f"Row data: {row}",
+                import_type="partners"
+            )
+            raise ValidationError(error_msg)
+        if 'ref' not in partner_data or not partner_data['ref'].strip():
+            error_msg = "Codice is required"
+            self._log_import_error(
+                error_type="Partner Validation Error",
+                message=error_msg,
+                details=f"Row data: {row}",
+                import_type="partners"
+            )
+            raise ValidationError(error_msg)
+        
+        # Validate email format if provided
+        if 'email' in partner_data and partner_data['email']:
+            import re
+            email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+            if not re.match(email_pattern, partner_data['email']):
+                _logger.warning(f"Invalid email format: {partner_data['email']}")
+                # Remove invalid email instead of failing
+                del partner_data['email']
+        
+        # Validate VAT format if provided
+        if 'vat' in partner_data and partner_data['vat']:
+            vat = partner_data['vat'].replace(' ', '').replace('.', '').replace('-', '')
+            if not vat.isalnum() or len(vat) < 8:
+                _logger.warning(f"Invalid VAT format: {partner_data['vat']}")
+                # Remove invalid VAT instead of failing
+                del partner_data['vat']
         
         # Set partner type based on name
 
@@ -421,25 +622,39 @@ class DbmImportWizard(models.TransientModel):
         Create or update partner record
         Returns dict with action info: {'action': 'created'|'updated', 'partner': partner_record}
         """
-        # Check if partner already exists by codice or name
-        domain = []
-        if 'ref' in partner_data:
-            domain.append(('ref', '=', partner_data['ref']))
-        else:
-            domain.append(('name', '=', partner_data['name']))
-        
-        existing_partner = self.env['res.partner'].search(domain, limit=1)
-        
-        if existing_partner:
-            # Update existing partner
-            existing_partner.write(partner_data)
-            _logger.info(f"Updated partner: {partner_data.get('name')} (ID: {existing_partner.id})")
-            return {'action': 'updated', 'partner': existing_partner}
-        else:
-            # Create new partner
-            new_partner = self.env['res.partner'].create(partner_data)
-            _logger.info(f"Created new partner: {partner_data.get('name')} (ID: {new_partner.id})")
-            return {'action': 'created', 'partner': new_partner}
+        try:
+            # Check if partner already exists by codice or name
+            domain = []
+            if 'ref' in partner_data:
+                domain.append(('ref', '=', partner_data['ref']))
+            else:
+                domain.append(('name', '=', partner_data['name']))
+            
+            existing_partner = self.env['res.partner'].search(domain, limit=1)
+            
+            if existing_partner:
+                # Update existing partner
+                existing_partner.write(partner_data)
+                _logger.info(f"Updated partner: {partner_data.get('name')} (ID: {existing_partner.id})")
+                return {'action': 'updated', 'partner': existing_partner}
+            else:
+                # Create new partner
+                new_partner = self.env['res.partner'].create(partner_data)
+                _logger.info(f"Created new partner: {partner_data.get('name')} (ID: {new_partner.id})")
+                return {'action': 'created', 'partner': new_partner}
+        except Exception as e:
+            error_msg = f"Error creating/updating partner {partner_data.get('name', 'N/A')}: {str(e)}"
+            
+            # Log error to ir.logging
+            self._log_import_error(
+                error_type="Partner Create/Update Error",
+                message=error_msg,
+                details=f"Partner data: {partner_data}",
+                import_type="partners"
+            )
+            
+            _logger.error(error_msg)
+            raise ValidationError(f"Error creating/updating partner: {str(e)}")
 
     def action_import_file(self):
         """
@@ -460,6 +675,7 @@ class DbmImportWizard(models.TransientModel):
         Prepare project data from CSV row
         """
         project_data = {}
+        _logger.info(f"Preparing project data from row: {row}")
         
         for csv_field, odoo_field in field_mapping.items():
             if csv_field in row and row[csv_field].strip():
@@ -506,11 +722,20 @@ class DbmImportWizard(models.TransientModel):
                         project_data[odoo_field] = priority_mapping[priority_name]
                     else:
                         project_data[odoo_field] = '0'  # Default to medium
-                elif odoo_field in ['date_start', 'date_end']:
+                elif odoo_field in ['date_start', 'date_end', 'date']:
                     # Parse dates
                     try:
-                        # Try different date formats
-                        date_formats = ['%d/%m/%Y %H:%M', '%d/%m/%Y', '%Y-%m-%d %H:%M', '%Y-%m-%d']
+                        # Try different date formats, including the specific format from CSV
+                        date_formats = [
+                            '%d/%m/%Y %H:%M',      # 31/03/2024 1:00
+                            '%d/%m/%Y %H:%M:%S',   # 31/03/2024 1:00:00
+                            '%d/%m/%Y',            # 31/03/2024
+                            '%Y-%m-%d %H:%M:%S',   # 2024-03-31 01:00:00
+                            '%Y-%m-%d %H:%M',      # 2024-03-31 01:00
+                            '%Y-%m-%d',            # 2024-03-31
+                            '%d-%m-%Y %H:%M',      # 31-03-2024 1:00
+                            '%d-%m-%Y',            # 31-03-2024
+                        ]
                         parsed_date = None
                         
                         for date_format in date_formats:
@@ -521,22 +746,44 @@ class DbmImportWizard(models.TransientModel):
                                 continue
                         
                         if parsed_date:
+                            # Convert to Odoo datetime format
                             project_data[odoo_field] = parsed_date.strftime('%Y-%m-%d %H:%M:%S')
+                            _logger.info(f"Successfully parsed date '{value}' as '{project_data[odoo_field]}' for field {odoo_field}")
                         else:
-                            _logger.warning(f"Unable to parse date '{value}' for field {odoo_field}")
+                            _logger.warning(f"Unable to parse date '{value}' for field {odoo_field}. Supported formats: DD/MM/YYYY HH:MM, DD/MM/YYYY, YYYY-MM-DD HH:MM:SS")
                     except Exception as e:
                         _logger.warning(f"Error parsing date '{value}': {str(e)}")
                 else:
                     project_data[odoo_field] = value
         
-        # Set default values
-        if 'name' not in project_data:
-            raise ValidationError("Project name (Commessa) is required")
+        # Set default values and validate required fields
+        if 'name' not in project_data or not project_data['name'].strip():
+            error_msg = "Project name (Commessa) is required"
+            self._log_import_error(
+                error_type="Project Validation Error",
+                message=error_msg,
+                details=f"Row data: {row}",
+                import_type="projects"
+            )
+            raise ValidationError(error_msg)
+        
+        # Validate date fields if provided
+        for date_field in ['date_start', 'date_end', 'date']:
+            if date_field in project_data and project_data[date_field]:
+                try:
+                    # Validate that the date string is properly formatted for Odoo
+                    datetime.strptime(project_data[date_field], '%Y-%m-%d %H:%M:%S')
+                    _logger.info(f"Date validation successful for {date_field}: {project_data[date_field]}")
+                except ValueError:
+                    _logger.warning(f"Invalid date format for {date_field}: {project_data[date_field]}. Expected format: YYYY-MM-DD HH:MM:SS")
+                    # Remove invalid date instead of failing
+                    del project_data[date_field]
         
         # Set default project type if not specified
         if 'type_dbm' not in project_data:
             project_data['type_dbm'] = 'GENERICO'
         
+        _logger.info(f"Final project data prepared: {project_data}")
         return project_data
 
     def _create_or_update_project(self, project_data):
@@ -544,22 +791,51 @@ class DbmImportWizard(models.TransientModel):
         Create or update project record
         Returns dict with action info: {'action': 'created'|'updated', 'project': project_record}
         """
-        # Check if project already exists by code or name
-        domain = []
-        if 'code' in project_data:
-            domain.append(('code', '=', project_data['code']))
-        else:
-            domain.append(('name', '=', project_data['name']))
-        
-        existing_project = self.env['project.project'].search(domain, limit=1)
-        
-        if existing_project:
-            # Update existing project
-            existing_project.write(project_data)
-            _logger.info(f"Updated project: {project_data.get('name')} (ID: {existing_project.id})")
-            return {'action': 'updated', 'project': existing_project}
-        else:
-            # Create new project
-            new_project = self.env['project.project'].create(project_data)
-            _logger.info(f"Created new project: {project_data.get('name')} (ID: {new_project.id})")
-            return {'action': 'created', 'project': new_project}
+        try:
+            _logger.info(f"Attempting to create/update project with data: {project_data}")
+            
+            # Check if project already exists by code or name
+            domain = []
+            if 'code' in project_data and project_data['code']:
+                domain.append(('code', '=', project_data['code']))
+                _logger.info(f"Searching for existing project by code: {project_data['code']}")
+            else:
+                domain.append(('name', '=', project_data['name']))
+                _logger.info(f"Searching for existing project by name: {project_data['name']}")
+            
+            existing_project = self.env['project.project'].search(domain, limit=1)
+            _logger.info(f"Found existing project: {existing_project}")
+            
+            if existing_project:
+                # Update existing project
+                _logger.info(f"Updating existing project ID: {existing_project.id}")
+                existing_project.write(project_data)
+                _logger.info(f"Successfully updated project: {project_data.get('name')} (ID: {existing_project.id})")
+                return {'action': 'updated', 'project': existing_project}
+            else:
+                # Create new project
+                _logger.info(f"Creating new project with data: {project_data}")
+                new_project = self.env['project.project'].create(project_data)
+                _logger.info(f"Successfully created new project: {project_data.get('name')} (ID: {new_project.id})")
+                
+                # Verify the project was actually created
+                if new_project.exists():
+                    _logger.info(f"Project creation verified - ID: {new_project.id}, Name: {new_project.name}")
+                else:
+                    _logger.error("Project creation failed - record does not exist after creation")
+                    raise ValidationError("Project creation failed - record does not exist after creation")
+                
+                return {'action': 'created', 'project': new_project}
+        except Exception as e:
+            error_msg = f"Error creating/updating project {project_data.get('name', 'N/A')}: {str(e)}"
+            
+            # Log error to ir.logging
+            self._log_import_error(
+                error_type="Project Create/Update Error",
+                message=error_msg,
+                details=f"Project data: {project_data}",
+                import_type="projects"
+            )
+            
+            _logger.error(error_msg)
+            raise ValidationError(f"Error creating/updating project: {str(e)}")
