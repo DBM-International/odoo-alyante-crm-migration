@@ -9,12 +9,18 @@
             <field name="arch" type="xml">
                 <!-- Add custom fields in the project form -->
                 <xpath expr="//field[@name='description']" position="after">
-                    <group string="Informazioni CSV Import" col="2">
+                    <group string="Informazioni" col="2">
                         <field name="code" placeholder="Codice univoco del progetto"/>
                         <field name="cig" placeholder="Codice Identificativo Gara"/>
                         <field name="cup" placeholder="Codice Unico di Progetto"/>
                         <field name="type_dbm" placeholder="Tipologia del progetto"/>
                     </group>
+                </xpath>
+                <xpath expr="//form/sheet/group/group/field[@name='date_start']" position="attributes">
+                    <attribute name="required">0</attribute>
+                </xpath>
+                <xpath expr="//form/sheet/group/group/field[@name='date']" position="attributes">
+                    <attribute name="required">0</attribute>
                 </xpath>
             </field>
         </record>

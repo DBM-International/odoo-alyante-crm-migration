@@ -206,12 +206,13 @@ class DbmImportWizard(models.TransientModel):
                 'Prov.': 'state_id',
                 'NAZIONE': 'country_id',
                 'Partita IVA': 'vat',
-                'Codice fiscale': 'vat',
+                'Codice fiscale': 'l10n_it_codice_fiscale',
                 'Num.tel.1': 'phone',
-                'Num.tel.2': 'phone',
                 'Cell.': 'mobile',
                 'E-mail': 'email',
                 'Internet': 'website',
+                'Num.tel.2': 'comment',
+                'Fax': 'comment'
             }
             
             created_count = 0
@@ -223,8 +224,6 @@ class DbmImportWizard(models.TransientModel):
             
             for row_num, row in enumerate(reader, start=2):  # Start from 2 if header exists
                 try:
-                    # Start a savepoint for each row
-                    savepoint = self.env.cr.savepoint()
                     
                     partner_data = self._prepare_partner_data(row, field_mapping)
                     if partner_data:
@@ -236,8 +235,6 @@ class DbmImportWizard(models.TransientModel):
                             updated_count += 1
                             updated_partners.append(f"{partner_data.get('name', 'N/A')} (Codice: {partner_data.get('ref', 'N/A')})")
                     
-                    # Commit the savepoint if successful
-                    savepoint.close()
                     
                 except Exception as e:
                     error_count += 1
@@ -411,6 +408,7 @@ class DbmImportWizard(models.TransientModel):
                     
                     project_data = self._prepare_project_data(row, field_mapping)
                     if project_data:
+                        project_data['allow_billable'] = True
                         result = self._create_or_update_project(project_data)
                         if result['action'] == 'created':
                             created_count += 1
@@ -615,6 +613,19 @@ class DbmImportWizard(models.TransientModel):
         if italy:
             partner_data['country_id'] = italy.id
         
+        # Process special fields for notes (Num.tel.2 and Fax)
+        notes_parts = []
+        if 'Num.tel.2' in row and row['Num.tel.2'].strip():
+            notes_parts.append(f"Num.tel.2: {row['Num.tel.2'].strip()}")
+        
+        if 'Fax' in row and row['Fax'].strip():
+            notes_parts.append(f"Fax: {row['Fax'].strip()}")
+        
+        # Add notes if any special fields were found
+        if notes_parts:
+            partner_data['comment'] = ', '.join(notes_parts)
+
+        
         return partner_data
 
     def _create_or_update_partner(self, partner_data):
@@ -692,18 +703,28 @@ class DbmImportWizard(models.TransientModel):
                     else:
                         _logger.warning(f"Partner '{value}' not found")
                 elif odoo_field == 'stage_id':
-                    # Gestione stage: se non è nella mappa, crea uno nuovo con il nome originale
-                    stage_name_map = {
-                        'CHIUSO': 'Closed',
-                        'IN ESSERE': 'In Progress',
-                        'PIANIFICAZIONE': 'PIANIFICAZIONE',
+                    # Mappa standardizzata per le fasi progetto
+                    # Se esistono già: Da fare, In corso, Completato, Annullato
+                    # Se arriva per esempio "In Progress" o "Closed", mappali su quelli esistenti
+                    standard_stage_map = {
+                        'DA FARE': 'Da fare',
+                        'TO DO': 'Da fare',
+                        'IN CORSO': 'In corso',
+                        'IN PROGRESS': 'In corso',
+                        'COMPLETATO': 'Completato',
+                        'COMPLETED': 'Completato',
+                        'CHIUSO': 'Completato',
+                        'ANNULLATO': 'Annullato',
+                        'CANCELLED': 'Annullato',
+                        'CANCELED': 'Annullato',
                     }
-                    stage_key = value.upper()
-                    stage_name = stage_name_map.get(stage_key)
+                    stage_key = value.strip().upper()
+                    stage_name = standard_stage_map.get(stage_key)
                     if not stage_name:
                         # Se non è nella mappa, usa il valore originale come nome stage
                         stage_name = value.strip()
                         _logger.info(f"Stage '{stage_name}' non presente in mappa, verrà creato come nuovo stage.")
+                    # Cerca se esiste già uno stage con questo nome
                     stage = self.env['project.project.stage'].search([('name', '=', stage_name)], limit=1)
                     if not stage:
                         # Crea lo stage se non esiste
