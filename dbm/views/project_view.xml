@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Inherit project form view to add custom fields -->
+        <record id="view_project_form_inherit_dbm" model="ir.ui.view">
+            <field name="name">project.project.form.inherit.dbm</field>
+            <field name="model">project.project</field>
+            <field name="inherit_id" ref="project.edit_project"/>
+            <field name="arch" type="xml">
+                <!-- Add custom fields in the project form -->
+                <xpath expr="//field[@name='description']" position="after">
+                    <group string="Informazioni CSV Import" col="2">
+                        <field name="code" placeholder="Codice univoco del progetto"/>
+                        <field name="cig" placeholder="Codice Identificativo Gara"/>
+                        <field name="cup" placeholder="Codice Unico di Progetto"/>
+                        <field name="type_dbm" placeholder="Tipologia del progetto"/>
+                    </group>
+                </xpath>
+            </field>
+        </record>
+
+        <!-- Inherit project tree view to show codice -->
+        <record id="view_project_tree_inherit_dbm" model="ir.ui.view">
+            <field name="name">project.project.tree.inherit.dbm</field>
+            <field name="model">project.project</field>
+            <field name="inherit_id" ref="project.view_project_project_filter"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='name']" position="after">
+                    <field name="code" optional="show"/>
+                </xpath>
+            </field>
+        </record>
+
+        <!-- Inherit project search view to add codice filter -->
+        <record id="view_project_search_inherit_dbm" model="ir.ui.view">
+            <field name="name">project.project.search.inherit.dbm</field>
+            <field name="model">project.project</field>
+            <field name="inherit_id" ref="project.view_project_project_filter"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='name']" position="after">
+                    <field name="code"/>
+                    <field name="cig"/>
+                    <field name="cup"/>
+                    <field name="type_dbm"/>
+                </xpath>
+                <xpath expr="//filter[@name='my_projects']" position="after">
+                    <separator/>
+                    <filter string="Con Codice" name="with_code" domain="[('code', '!=', False)]"/>
+                    <filter string="Senza Codice" name="without_code" domain="[('code', '=', False)]"/>
+                    <filter string="Con CIG" name="with_cig" domain="[('cig', '!=', False)]"/>
+                    <filter string="Con CUP" name="with_cup" domain="[('cup', '!=', False)]"/>
+                </xpath>
+            </field>
+        </record>
+
+        <!-- Kanban view for projects -->
+        <record id="view_project_kanban_inherit_dbm" model="ir.ui.view">
+            <field name="name">project.project.kanban.inherit.dbm</field>
+            <field name="model">project.project</field>
+            <field name="inherit_id" ref="project.view_project_kanban"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='last_update_color']" position="after">
+                    <field name="code"/>
+                    <field name="type_dbm"/>
+                </xpath>
+                <!-- <xpath expr="//div[@class='o_kanban_record_top']" position="inside">
+                    <div class="o_kanban_record_subtitle">
+                        <field name="code" class="text-muted"/>
+                        <span t-if="record.code.raw_value" class="text-muted"> - </span>
+                        <field name="type_dbm" class="text-muted"/>
+                    </div>
+                </xpath> -->
+            </field>
+        </record>
+    </data>
+</odoo>

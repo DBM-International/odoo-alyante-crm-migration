@@ -1,0 +1,109 @@
+<?xml version="1.0"?>
+<odoo>
+	<data>
+		<record id="view_dbm_import_wizard" model="ir.ui.view">
+			<field name="name">dbm.import.wizard</field>
+			<field name="model">dbm.import.wizard</field>
+			<field name="arch" type="xml">
+				<form string="Importazione Dati">
+					<sheet>
+						<div class="oe_title">
+							<h1>
+								<field name="table_import" widget="selection" placeholder="Seleziona il tipo di importazione..." required="1"/>
+							</h1>
+						</div>
+						<group>
+							<group>
+								<field name="file" widget="file" string="File CSV" required="1" filename="file_name"/>
+								<field name="file_name" invisible="1"/>
+								<field name="delimiter" widget="selection"/>
+								<field name="file_encoding" widget="selection"/>
+								<field name="has_header"/>
+							</group>
+							<group>
+								<field name="note" widget="text" string="Risultati Importazione" readonly="1"/>
+							</group>
+						</group>
+						<div class="alert alert-info" role="alert">
+							<strong>Istruzioni per l'importazione CSV:</strong>
+							<ul>
+								<li><strong>Tipo di importazione:</strong> Seleziona "Contatti" per importare partner/clienti o "Progetti" per importare progetti</li>
+								<li><strong>Formato file:</strong> Carica un file CSV con le seguenti colonne:</li>
+								<ul>
+									<li><strong>Codice:</strong> Codice univoco del partner</li>
+									<li><strong>Nome Completo:</strong> Nome completo del partner (obbligatorio)</li>
+									<li><strong>Indirizzo:</strong> Indirizzo stradale</li>
+									<li><strong>CAP:</strong> Codice postale (5 cifre)</li>
+									<li><strong>Città:</strong> Nome della città</li>
+									<li><strong>Prov.:</strong> Codice della provincia (es. CZ, RC, VV)</li>
+									<li><strong>NAZIONE:</strong> Codice della nazione (es. IT, DE, FR)</li>
+									<li><strong>Partita IVA:</strong> Partita IVA del partner</li>
+									<li><strong>Codice fiscale:</strong> Codice fiscale del partner</li>
+									<li><strong>Num.tel.1:</strong> Numero di telefono 1 del partner</li>
+									<li><strong>Cell.:</strong> Cellulare del partner</li>
+									<li><strong>E-mail:</strong> Email del partner</li>
+									<li><strong>Internet:</strong> Sito web del partner</li>
+								</ul>
+								
+								<strong>Per PROGETTI - Formato file CSV:</strong>
+								<ul>
+									<li><strong>Commessa:</strong> Nome del progetto (obbligatorio)</li>
+									<li><strong>Cliente:</strong> Nome del cliente/partner</li>
+									<li><strong>Codice:</strong> Codice univoco del progetto</li>
+									<li><strong>Descrizione:</strong> Descrizione del progetto</li>
+									<li><strong>Stato:</strong> Stato del progetto (CHIUSO, IN ESSERE, PIANIFICAZIONE)</li>
+									<li><strong>Tipologia:</strong> Tipo di progetto (ERREDI, COMM. MANGIAPET, GARA, ECOISOLA)</li>
+									<li><strong>Priorità:</strong> Priorità (ALTA, MEDIA, BASSA)</li>
+									<li><strong>CIG:</strong> Codice Identificativo Gara</li>
+									<li><strong>CUP:</strong> Codice Unico di Progetto</li>
+									<li><strong>Data fine effettiva:</strong> Data di fine effettiva (dd/mm/yyyy hh:mm)</li>
+									<li><strong>Data inizio pianificata:</strong> Data di inizio pianificata (dd/mm/yyyy hh:mm)</li>
+								</ul>
+								
+								<li><strong>Separatore:</strong> Seleziona il separatore utilizzato nel file CSV</li>
+								<li><strong>Codifica:</strong> Seleziona la codifica del file (Auto-detect per rilevamento automatico)</li>
+								<li><strong>Intestazioni:</strong> Spunta se la prima riga contiene le intestazioni delle colonne</li>
+								<li><strong>Aggiornamento:</strong> I record esistenti con lo stesso codice verranno aggiornati</li>
+								<li><strong>Nota:</strong> Se ricevi errori di codifica, prova a salvare il file come UTF-8 o seleziona Windows-1252</li>
+							</ul>
+						</div>
+					</sheet>
+					<footer>
+						<button name="action_import_file" string="Importa Dati" type="object" class="btn-primary" confirm="Sei sicuro di voler importare questi dati?"/>
+						<button string="Annulla" class="btn-secondary" special="cancel"/>
+					</footer>
+				</form>
+			</field>
+		</record>
+
+		<!-- Action for Import Wizard -->
+		<record id="action_dbm_import_wizard" model="ir.actions.act_window">
+			<field name="name">Import Data</field>
+			<field name="res_model">dbm.import.wizard</field>
+			<field name="view_mode">form</field>
+			<field name="target">new</field>
+			<field name="view_id" ref="view_dbm_import_wizard"/>
+		</record>
+
+		<!-- Menu Item in Administration -->
+		<menuitem id="menu_dbm_import"
+				  name="Import Data"
+				  action="action_dbm_import_wizard"
+				  sequence="100"/>
+
+		<!-- Menu Item in Contacts -->
+		<menuitem id="menu_dbm_import_contacts"
+				  name="Import Contacts"
+				  parent="contacts.menu_contacts"
+				  action="action_dbm_import_wizard"
+				  sequence="100"/>
+
+		<!-- Menu Item in Projects -->
+		<menuitem id="menu_dbm_import_projects"
+				  name="Import Projects"
+				  parent="project.menu_main_pm"
+				  action="action_dbm_import_wizard"
+				  sequence="100"/>
+
+	</data>
+</odoo>
