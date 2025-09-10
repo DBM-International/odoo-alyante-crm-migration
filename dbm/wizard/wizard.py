@@ -54,6 +54,7 @@ class DbmImportWizard(models.TransientModel):
                 'path': 'dbm.import.wizard',
                 'line': row_number or 0,
                 'func': f"_import_{import_type}" if import_type else "import_file",
+                'type': 'server',  # Add required type field
                 'create_date': fields.Datetime.now(),
                 'create_uid': self.env.user.id,
             }
@@ -562,20 +563,22 @@ class DbmImportWizard(models.TransientModel):
                 value = row[csv_field].strip()
                 
                 if odoo_field == 'vat' and not partner_data.get('vat'):
+                    # Always add VAT, we'll handle validation during creation
                     partner_data['vat'] = value
                 elif odoo_field == 'phone' and not partner_data.get('phone'):
                     partner_data['phone'] = value
         
         # Set default values and validate required fields
         if 'name' not in partner_data or not partner_data['name'].strip():
-            error_msg = "Partner name is required"
-            self._log_import_error(
-                error_type="Partner Validation Error",
-                message=error_msg,
-                details=f"Row data: {row}",
-                import_type="partners"
-            )
-            raise ValidationError(error_msg)
+            partner_data['name'] = partner_data.get('ref', 'N/A')
+            # error_msg = "Partner name is required"
+            # self._log_import_error(
+            #     error_type="Partner Validation Error",
+            #     message=error_msg,
+            #     details=f"Row data: {row}",
+            #     import_type="partners"
+            # )
+            # raise ValidationError(error_msg)
         if 'ref' not in partner_data or not partner_data['ref'].strip():
             error_msg = "Codice is required"
             self._log_import_error(
@@ -631,8 +634,12 @@ class DbmImportWizard(models.TransientModel):
     def _create_or_update_partner(self, partner_data):
         """
         Create or update partner record
-        Returns dict with action info: {'action': 'created'|'updated', 'partner': partner_record}
+        Returns dict with action info: {'action': 'created'|'updated', 'partner': partner_record, 'vat': vat_value, 'cf': cf_value}
         """
+        # Extract VAT and Codice Fiscale before creating partner
+        vat_value = partner_data.pop('vat', None)
+        cf_value = partner_data.pop('l10n_it_codice_fiscale', None)
+        
         try:
             # Check if partner already exists by codice or name
             domain = []
@@ -644,15 +651,26 @@ class DbmImportWizard(models.TransientModel):
             existing_partner = self.env['res.partner'].search(domain, limit=1)
             
             if existing_partner:
-                # Update existing partner
-                existing_partner.write(partner_data)
+                # Update existing partner without VAT and CF
+                try:
+                    existing_partner.write(partner_data)
+                except Exception as e:
+                    _logger.error(f"Error updating partner: {str(e)}")
+                    self.env.cr.rollback()
+
                 _logger.info(f"Updated partner: {partner_data.get('name')} (ID: {existing_partner.id})")
-                return {'action': 'updated', 'partner': existing_partner}
+                result = {'action': 'updated', 'partner': existing_partner, 'vat': vat_value, 'cf': cf_value}
             else:
-                # Create new partner
+                # Create new partner without VAT and CF
                 new_partner = self.env['res.partner'].create(partner_data)
                 _logger.info(f"Created new partner: {partner_data.get('name')} (ID: {new_partner.id})")
-                return {'action': 'created', 'partner': new_partner}
+                result = {'action': 'created', 'partner': new_partner, 'vat': vat_value, 'cf': cf_value}
+
+                self._update_partner_vat_cf_sql(result['partner'].id, vat_value, cf_value)
+                
+            
+            return result
+            
         except Exception as e:
             error_msg = f"Error creating/updating partner {partner_data.get('name', 'N/A')}: {str(e)}"
             
@@ -666,6 +684,66 @@ class DbmImportWizard(models.TransientModel):
             
             _logger.error(error_msg)
             raise ValidationError(f"Error creating/updating partner: {str(e)}")
+    
+    def _update_partner_vat_cf_sql(self, partner_id, vat_value, cf_value):
+        """
+        Update partner VAT and Codice Fiscale using direct SQL to bypass validation.
+        If an error occurs, append the error message to the partner's 'comment' field (text), using SQL.
+        Handles VAT and CF separately, so if both are present and both fail, both errors are logged.
+        The comment is always appended (not overwritten).
+        """
+        # Try to update VAT first, then CF, so both can be attempted and errors logged individually
+        self.env.cr.commit()
+        if vat_value:
+            try:
+                sql = "UPDATE res_partner SET vat = %s, write_date = NOW() WHERE id = %s"
+                self.env.cr.execute(sql, (vat_value, partner_id))
+                self.env.cr.commit()
+                _logger.info(f"Updated partner {partner_id} with SQL - VAT: {vat_value}")
+            except Exception as e:
+                _logger.warning(f"Failed to update VAT for partner {partner_id} with SQL: {str(e)}")
+                self.env.cr.rollback()
+                # Log error in comment field (append, not overwrite)
+                try:
+                    comment_sql = """
+                        UPDATE res_partner
+                        SET comment = 
+                            CASE 
+                                WHEN comment IS NULL OR comment = '' THEN %s
+                                ELSE comment || %s
+                            END,
+                            write_date = NOW()
+                        WHERE id = %s
+                    """
+                    error_msg = f"Partita IVA non valida: {str(e)}\n"
+                    self.env.cr.execute(comment_sql, (error_msg, error_msg, partner_id))
+                except Exception as e2:
+                    _logger.warning(f"Failed to log VAT error in comment for partner {partner_id}: {str(e2)}")
+        if cf_value:
+            try:
+                sql = "UPDATE res_partner SET l10n_it_codice_fiscale = %s, write_date = NOW() WHERE id = %s"
+                self.env.cr.execute(sql, (cf_value, partner_id))
+                self.env.cr.commit()
+                _logger.info(f"Updated partner {partner_id} with SQL - CF: {cf_value}")
+            except Exception as e:
+                _logger.warning(f"Failed to update Codice Fiscale for partner {partner_id} with SQL: {str(e)}")
+                # Log error in comment field (append, not overwrite)
+                self.env.cr.rollback()
+                try:
+                    comment_sql = """
+                        UPDATE res_partner
+                        SET comment = 
+                            CASE 
+                                WHEN comment IS NULL OR comment = '' THEN %s
+                                ELSE comment || %s
+                            END,
+                            write_date = NOW()
+                        WHERE id = %s
+                    """
+                    error_msg = f"Codice Fiscale non valido: {cf_value}\n"
+                    self.env.cr.execute(comment_sql, (error_msg, error_msg, partner_id))
+                except Exception as e2:
+                    _logger.warning(f"Failed to log CF error in comment for partner {partner_id}: {str(e2)}")
 
     def action_import_file(self):
         """
