@@ -33,8 +33,10 @@
 		 
 	""",
 	'data': [
+		'data/activity_data.xml',
 		'views/partner_view.xml',
 		'views/project_view.xml',
+		'views/activity_view.xml',
 		'wizard/wizard_view.xml',
 
 		'security/ir.model.access.csv',

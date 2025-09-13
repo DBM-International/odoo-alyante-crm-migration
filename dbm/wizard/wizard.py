@@ -16,7 +16,7 @@ class DbmImportWizard(models.TransientModel):
 
     table_import = fields.Selection(
         string="Import Type", 
-        selection=[("partner", "Contatti"), ("project", "Progetti")], 
+        selection=[("partner", "Contatti"), ("project", "Progetti"), ("activity", "Attività")], 
         required=True,
         help="Select the type of data to import"
     )
@@ -147,6 +147,8 @@ class DbmImportWizard(models.TransientModel):
             return self._import_partners(file_data)
         elif import_type == "project":
             return self._import_projects(file_data)
+        elif import_type == "activity":
+            return self._import_activities(file_data)
         else:
             raise UserError(f"Import type '{import_type}' not supported")
 
@@ -938,3 +940,371 @@ class DbmImportWizard(models.TransientModel):
             
             _logger.error(error_msg)
             raise ValidationError(f"Error creating/updating project: {str(e)}")
+
+    def _import_activities(self, file_data):
+        """
+        Import activities from CSV file using project.task
+        """
+        # Start a new transaction for this import
+        self.env.cr.commit()
+        
+        try:
+            # Decode the file
+            file_content = base64.b64decode(file_data)
+            
+            # Get delimiter
+            delimiter_map = {
+                'comma': ',',
+                'semicolon': ';',
+                'tab': '\t'
+            }
+            delimiter = delimiter_map.get(self.delimiter, ',')
+            
+            # Handle file encoding
+            if self.file_encoding == 'auto':
+                # Try different encodings to handle various file formats
+                encodings_to_try = ['utf-8', 'utf-8-sig', 'cp1252', 'iso-8859-1', 'latin1']
+                csv_content = None
+                
+                for encoding in encodings_to_try:
+                    try:
+                        csv_content = file_content.decode(encoding)
+                        _logger.info(f"Successfully decoded file using encoding: {encoding}")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                if csv_content is None:
+                    raise UserError("Unable to decode the file. Please try selecting a specific encoding or save the file with UTF-8 encoding.")
+            else:
+                # Use user-selected encoding
+                try:
+                    csv_content = file_content.decode(self.file_encoding)
+                    _logger.info(f"Successfully decoded file using user-selected encoding: {self.file_encoding}")
+                except UnicodeDecodeError as e:
+                    raise UserError(f"Unable to decode the file using {self.file_encoding} encoding. Error: {str(e)}")
+            
+            # Parse CSV
+            csv_file = io.StringIO(csv_content)
+            reader = csv.DictReader(csv_file, delimiter=delimiter)
+            
+            # Field mapping for CSV columns to Odoo fields
+            field_mapping = {
+                'Attività': 'name',
+                'Azienda': 'partner_id',
+                'In carico a': 'user_ids',
+                'Data': 'date_deadline',
+                'Fatta/da fare': 'stage_id',
+                'Macro tipo': 'tag_ids',
+                'Commessa': 'project_id',
+                'Descrizione attività': 'description',
+                'Tipo attività': 'tag_ids',
+            }
+            
+            created_count = 0
+            updated_count = 0
+            error_count = 0
+            errors = []
+            created_activities = []
+            updated_activities = []
+            
+            for row_num, row in enumerate(reader, start=2):  # Start from 2 if header exists
+                try:
+                    activity_data = self._prepare_activity_data(row, field_mapping)
+                    if activity_data:
+                        result = self._create_or_update_activity(activity_data)
+                        if result['action'] == 'created':
+                            created_count += 1
+                            created_activities.append(f"{activity_data.get('name', 'N/A')} (Commessa: {activity_data.get('project_code', 'N/A')})")
+                            _logger.info(f"{row_num} - Created activity: {activity_data.get('name', 'N/A')}")
+                        elif result['action'] == 'updated':
+                            updated_count += 1
+                            updated_activities.append(f"{activity_data.get('name', 'N/A')} (Commessa: {activity_data.get('project_code', 'N/A')})")
+                    
+                except Exception as e:
+                    error_count += 1
+                    activity_name = row.get('Attività', 'N/A')
+                    project_code = row.get('Commessa', 'N/A')
+                    error_msg = f"Row {row_num} - {activity_name} (Commessa: {project_code}): {str(e)}"
+                    errors.append(error_msg)
+                    
+                    # Log error to ir.logging
+                    self._log_import_error(
+                        error_type="Activity Import Row Error",
+                        message=error_msg,
+                        details=f"Activity: {activity_name}, Project Code: {project_code}",
+                        row_number=row_num,
+                        import_type="activities"
+                    )
+                    
+                    _logger.error(f"Error importing activity at row {row_num}: {str(e)}")
+            
+            # Update note with detailed results
+            result_message = f"Import attività completato:\n"
+            result_message += f"- Attività create: {created_count}\n"
+            result_message += f"- Attività aggiornate: {updated_count}\n"
+            result_message += f"- Errori: {error_count}\n"
+            
+            # Show created activities
+            if created_activities:
+                result_message += f"\nAttività create:\n"
+                for activity in created_activities[:10]:  # Show first 10
+                    result_message += f"- {activity}\n"
+                if len(created_activities) > 10:
+                    result_message += f"... e altre {len(created_activities) - 10} attività create\n"
+            
+            # Show updated activities
+            if updated_activities:
+                result_message += f"\nAttività aggiornate:\n"
+                for activity in updated_activities[:10]:  # Show first 10
+                    result_message += f"- {activity}\n"
+                if len(updated_activities) > 10:
+                    result_message += f"... e altre {len(updated_activities) - 10} attività aggiornate\n"
+            
+            # Show errors
+            if errors:
+                result_message += f"\nErrori riscontrati:\n"
+                for error in errors[:10]:  # Show first 10 errors
+                    result_message += f"- {error}\n"
+                if len(errors) > 10:
+                    result_message += f"... e altri {len(errors) - 10} errori\n"
+            
+            self.note = result_message
+            
+            # Prepare notification message
+            notification_msg = f"Create: {created_count}, Aggiornate: {updated_count}"
+            if error_count > 0:
+                notification_msg += f", Errori: {error_count}"
+            
+            self.env.cr.commit()
+            
+            return {
+                'type': 'ir.actions.client',
+                'tag': 'display_notification',
+                'params': {
+                    'title': 'Import Attività Completato',
+                    'message': notification_msg,
+                    'type': 'success' if error_count == 0 else 'warning',
+                }
+            }
+            
+        except Exception as e:
+            # Rollback the entire transaction on critical error
+            error_msg = f"Error processing file: {str(e)}"
+            
+            # Log critical error to ir.logging
+            self._log_import_error(
+                error_type="Activity Import Critical Error",
+                message=error_msg,
+                details=f"File processing failed completely",
+                import_type="activities"
+            )
+            
+            _logger.error(error_msg)
+            raise UserError(error_msg)
+
+    def _prepare_activity_data(self, row, field_mapping):
+        """
+        Prepare activity data from CSV row
+        """
+        activity_data = {}
+        #_logger.info(f"Preparing activity data from row: {row}")
+
+        tag_names = {i.name:i.id for i in self.env['project.tags'].search([])}
+        stage_names = {i.name:i.id for i in self.env['project.task.type'].search([])}
+        user_names = {i.name:i.id for i in self.env['res.users'].search([])}
+        
+        for csv_field, odoo_field in field_mapping.items():
+            if csv_field in row and row[csv_field].strip():
+                value = row[csv_field].strip()
+                
+                # Special handling for specific fields
+                if odoo_field == 'partner_id':
+                    # Find company by name
+                    company = self.env['res.partner'].search([
+                        ('name', 'ilike', value),
+                    ], limit=1)
+                    if company:
+                        activity_data[odoo_field] = company.id
+                    else:
+                        _logger.warning(f"Company '{value}' not found")
+                elif odoo_field == 'user_ids':
+                    # Find user by name
+                    user = user_names.get(value, False)
+                    if user:
+                        activity_data[odoo_field] = [(4, user)]
+                    else:
+                        # Use current user if not found
+                        activity_data[odoo_field] = [(4, self.env.user.id)]
+                        #_logger.warning(f"User '{value}' not found, using current user: {self.env.user.name}")
+                elif odoo_field == 'stage_id':
+                    # Map stage names to project.task.stage
+                    stage_mapping = {
+                        'ANNULLATA': 'Annullata',
+                        'TO DO': 'Attività da fare',
+                        'COMPLCOMPLETEDETATA': 'Attività fatta',
+                    }
+                    stage_key = value.strip().upper()
+                    stage_name = stage_mapping.get(stage_key, value.strip())
+                    
+                    # Find stage in project.task.stage
+                    stage = stage_names.get(stage_name, False)
+                    if not stage:
+                        # Use default stage if not found
+                        stage = self.env['project.task.type'].create({
+                            'name': stage_name
+                        }).id
+                        stage_names[stage_name] = stage
+                        #_logger.warning(f"Stage '{stage_name}' not found, created new stage")
+                    if stage:
+                        activity_data[odoo_field] = stage
+                elif odoo_field == 'tag_ids':
+                    if value:
+                        tag_id = tag_names.get(value, False)
+                        if not tag_id:
+                            tag_id = self.env['project.tags'].create({
+                                'name': value
+                            }).id
+                            _logger.warning(f"Tag '{value}' not found, created new tag")
+                            tag_names[value] = tag_id
+                        if tag_id not in [i[1] for i in activity_data.get(odoo_field, [])]:
+                            if activity_data.get(odoo_field, []):
+                                activity_data[odoo_field].append((4, tag_id))
+                            else:
+                                activity_data[odoo_field] = [(4, tag_id)]
+                elif odoo_field == 'date_deadline':
+                    # Parse dates and convert to UTC to avoid timezone issues
+                    try:
+                        import pytz
+                        date_formats = [
+                            '%d/%m/%Y %H:%M',      # 31/03/2024 1:00
+                            '%d/%m/%Y %H:%M:%S',   # 31/03/2024 1:00:00
+                            '%d/%m/%Y',            # 31/03/2024
+                            '%Y-%m-%d %H:%M:%S',   # 2024-03-31 01:00:00
+                            '%Y-%m-%d %H:%M',      # 2024-03-31 01:00
+                            '%Y-%m-%d',            # 2024-03-31
+                            '%d-%m-%Y %H:%M',      # 31-03-2024 1:00
+                            '%d-%m-%Y',            # 31-03-2024
+                        ]
+                        parsed_date = None
+
+                        for date_format in date_formats:
+                            try:
+                                parsed_date = datetime.strptime(value, date_format)
+                                break
+                            except ValueError:
+                                continue
+
+                        if parsed_date:
+                            # Get user's timezone or default to UTC
+                            user_tz = self.env.user.tz or 'UTC'
+                            local_tz = pytz.timezone(user_tz)
+                            # If the parsed date has no time, set to 00:00
+                            if parsed_date.hour == 0 and parsed_date.minute == 0 and parsed_date.second == 0 and ('%H' not in date_format):
+                                parsed_date = parsed_date.replace(hour=0, minute=0, second=0)
+                            # Localize and convert to UTC
+                            localized_date = local_tz.localize(parsed_date)
+                            utc_date = localized_date.astimezone(pytz.utc)
+                            activity_data[odoo_field] = utc_date.strftime('%Y-%m-%d %H:%M:%S')
+                            #_logger.info(f"Successfully parsed date '{value}' as '{activity_data[odoo_field]}' (UTC, user tz: {user_tz})")
+                        else:
+                            _logger.warning(f"Unable to parse date '{value}'. Supported formats: DD/MM/YYYY HH:MM, DD/MM/YYYY, YYYY-MM-DD HH:MM:SS")
+                    except Exception as e:
+                        _logger.warning(f"Error parsing date '{value}': {str(e)}")
+                elif odoo_field == 'project_id':
+                    # Extract the project code by removing the suffix (e.g., "000001-24" from "PROJECT_NAME-000001-24")
+                    project_code = value
+                    if '-' in project_code:
+                        # Split by '-' and take all parts except the last one (which is the suffix)
+                        code_parts = project_code.split('-')
+                        if len(code_parts) > 1:
+                            # Remove the last part (suffix like "000001-24")
+                            clean_project_code = '-'.join(code_parts[:-1])
+                        else:
+                            clean_project_code = project_code
+                    else:
+                        clean_project_code = project_code
+                    if clean_project_code:
+                        project = self.env['project.project'].search([('code', '=', clean_project_code.strip())], limit=1)
+                        if project:
+                            activity_data[odoo_field] = project.id
+                        else:
+                            _logger.warning(f"Project '{clean_project_code}' not found")
+                elif odoo_field == 'name':
+                    activity_data[odoo_field] = value.strip()
+                elif odoo_field == 'planned_hours':
+                    # Parse time duration (skip for now as requested)
+                    continue
+                else:
+                    activity_data[odoo_field] = value
+        
+        # Set default values and validate required fields
+        if 'name' not in activity_data or not activity_data['name'].strip():
+            error_msg = "Activity name (Attività) is required"
+            self._log_import_error(
+                error_type="Activity Validation Error",
+                message=error_msg,
+                details=f"Row data: {row}",
+                import_type="activities"
+            )
+            raise ValidationError(error_msg)
+        
+        _logger.info(f"Final activity data prepared: {activity_data}")
+        return activity_data
+
+    def _create_or_update_activity(self, activity_data):
+        """
+        Create or update activity record using project.task
+        Returns dict with action info: {'action': 'created'|'updated', 'activity': activity_record}
+        """
+        try:
+            _logger.info(f"Attempting to create/update activity with data: {activity_data}")
+            
+            # Check if activity already exists by name and project_code
+            domain = [('name', '=', activity_data['name'])]
+            if 'project_id' in activity_data and activity_data['project_id']:
+                # Extract the project code by removing the suffix (e.g., "000001-24" from "PROJECT_NAME-000001-24")
+                               
+                project = activity_data['project_id']
+                if project:
+                    domain.append(('project_id', '=', project))
+                else:
+                    _logger.warning(f"Project '{activity_data['project_id']}' not found")
+            
+            #existing_activity = self.env['project.task'].search(domain, limit=1)
+            existing_activity = False
+            _logger.info(f"Found existing activity: {existing_activity}")
+            
+            if existing_activity:
+                # Update existing activity
+                _logger.info(f"Updating existing activity ID: {existing_activity.id}")
+                existing_activity.write(activity_data)
+                _logger.info(f"Successfully updated activity: {activity_data.get('name')} (ID: {existing_activity.id})")
+                return {'action': 'updated', 'activity': existing_activity}
+            else:
+                # Create new activity
+                _logger.info(f"Creating new activity with data: {activity_data}")
+                new_activity = self.env['project.task'].create(activity_data)
+                _logger.info(f"Successfully created new activity: {activity_data.get('name')} (ID: {new_activity.id})")
+                
+                # Verify the activity was actually created
+                if new_activity.exists():
+                    _logger.info(f"Activity creation verified - ID: {new_activity.id}, Name: {new_activity.name}")
+                else:
+                    _logger.error("Activity creation failed - record does not exist after creation")
+                    raise ValidationError("Activity creation failed - record does not exist after creation")
+                
+                return {'action': 'created', 'activity': new_activity}
+        except Exception as e:
+            error_msg = f"Error creating/updating activity {activity_data.get('name', 'N/A')}: {str(e)}"
+            
+            # Log error to ir.logging
+            self._log_import_error(
+                error_type="Activity Create/Update Error",
+                message=error_msg,
+                details=f"Activity data: {activity_data}",
+                import_type="activities"
+            )
+            
+            _logger.error(error_msg)
+            raise ValidationError(f"Error creating/updating activity: {str(e)}")
