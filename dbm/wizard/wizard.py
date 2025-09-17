@@ -41,6 +41,11 @@ class DbmImportWizard(models.TransientModel):
         default='auto',
         help="Select the file encoding. Use 'Auto-detect' for automatic detection."
     )
+    user_id = fields.Many2one(
+        'res.users',
+        string="User",
+        help="Select the user to assign to the activities"
+    )
 
     def _log_import_error(self, error_type, message, details=None, row_number=None, import_type=None):
         """
@@ -911,6 +916,7 @@ class DbmImportWizard(models.TransientModel):
                 # Update existing project
                 _logger.info(f"Updating existing project ID: {existing_project.id}")
                 existing_project.write(project_data)
+                existing_project.user_id = self.user_id.id
                 _logger.info(f"Successfully updated project: {project_data.get('name')} (ID: {existing_project.id})")
                 return {'action': 'updated', 'project': existing_project}
             else:
@@ -918,6 +924,8 @@ class DbmImportWizard(models.TransientModel):
                 _logger.info(f"Creating new project with data: {project_data}")
                 new_project = self.env['project.project'].create(project_data)
                 _logger.info(f"Successfully created new project: {project_data.get('name')} (ID: {new_project.id})")
+
+                new_project.user_id = self.user_id.id
                 
                 # Verify the project was actually created
                 if new_project.exists():
@@ -993,7 +1001,7 @@ class DbmImportWizard(models.TransientModel):
                 'Attività': 'name',
                 'Azienda': 'partner_id',
                 'In carico a': 'user_ids',
-                'Data': 'date_deadline',
+                'Data': 'planned_date_start',
                 'Fatta/da fare': 'stage_id',
                 'Macro tipo': 'tag_ids',
                 'Commessa': 'project_id',
@@ -1130,19 +1138,22 @@ class DbmImportWizard(models.TransientModel):
                         _logger.warning(f"Company '{value}' not found")
                 elif odoo_field == 'user_ids':
                     # Find user by name
-                    user = user_names.get(value, False)
-                    if user:
-                        activity_data[odoo_field] = [(4, user)]
+                    if self.user_id:
+                        activity_data[odoo_field] = [(4, self.user_id.id)]
                     else:
-                        # Use current user if not found
-                        activity_data[odoo_field] = [(4, self.env.user.id)]
-                        #_logger.warning(f"User '{value}' not found, using current user: {self.env.user.name}")
+                        user = user_names.get(value, False)
+                        if user:
+                            activity_data[odoo_field] = [(4, user)]
+                        else:
+                            # Use current user if not found
+                            activity_data[odoo_field] = [(4, self.env.user.id)]
+                            #_logger.warning(f"User '{value}' not found, using current user: {self.env.user.name}")
                 elif odoo_field == 'stage_id':
                     # Map stage names to project.task.stage
                     stage_mapping = {
                         'ANNULLATA': 'Annullata',
                         'TO DO': 'Attività da fare',
-                        'COMPLCOMPLETEDETATA': 'Attività fatta',
+                        'COMPLETED': 'Attività fatta',
                     }
                     stage_key = value.strip().upper()
                     stage_name = stage_mapping.get(stage_key, value.strip())
@@ -1158,6 +1169,8 @@ class DbmImportWizard(models.TransientModel):
                         #_logger.warning(f"Stage '{stage_name}' not found, created new stage")
                     if stage:
                         activity_data[odoo_field] = stage
+                        if stage_key == 'ATTIVITÀ FATTA':
+                            activity_data['state'] = '1_done'
                 elif odoo_field == 'tag_ids':
                     if value:
                         tag_id = tag_names.get(value, False)
@@ -1172,7 +1185,7 @@ class DbmImportWizard(models.TransientModel):
                                 activity_data[odoo_field].append((4, tag_id))
                             else:
                                 activity_data[odoo_field] = [(4, tag_id)]
-                elif odoo_field == 'date_deadline':
+                elif odoo_field == 'planned_date_start':
                     # Parse dates and convert to UTC to avoid timezone issues
                     try:
                         import pytz

@@ -70,6 +70,8 @@ class ProjectTask(models.Model):
         domain="[('is_company', '=', True)]",
         help="Azienda cliente"
     )
+
+    planned_date_start = fields.Datetime(string="Data pianificata")
     
     @api.model
     def create(self, vals):
@@ -86,6 +88,9 @@ class ProjectTask(models.Model):
                 _logger.warning(f"Project with code {vals['project_code']} not found")
         
         return super().create(vals)
+
+    def write(self, vals):
+        return super().write(vals)
     
     @api.constrains('project_code')
     def _check_project_code_format(self):

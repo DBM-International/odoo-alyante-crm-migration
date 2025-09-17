@@ -19,6 +19,7 @@
 								<field name="delimiter" widget="selection"/>
 								<field name="file_encoding" widget="selection"/>
 								<field name="has_header"/>
+								<field name="user_id" widget="selection" string="Utente"/>
 							</group>
 							<group>
 								<field name="note" widget="text" string="Risultati Importazione" readonly="1"/>
