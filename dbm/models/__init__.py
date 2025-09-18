@@ -4,3 +4,5 @@
 
 from . import partner
 from . import project
+from . import helpdesk
+from . import stock_lot

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Inherit project form view to add custom fields -->
+        <record id="view_helpdesk_ticket_form_inherit_dbm" model="ir.ui.view">
+            <field name="name">helpdesk.ticket.form.inherit.dbm</field>
+            <field name="model">helpdesk.ticket</field>
+            <field name="inherit_id" ref="helpdesk_mgmt.ticket_view_form"/>
+            <field name="arch" type="xml">
+                <!-- Add custom fields in the helpdesk ticket form -->
+                <xpath expr="//form/sheet/group/group/field[@name='partner_id']" position="after">
+                    <field name="assigned_date" placeholder="Data assegnazione"/>
+                    <field name="planned_date" placeholder="Data pianificazione"/>
+                </xpath>
+            </field>
+        </record>
+
+        
+        
+    </data>
+</odoo>

@@ -25,7 +25,7 @@
 	'author': 'Eduard Oboroceanu',
 	'version': '1.1',
 	'depends': [
-		"base", "contacts", "project", "base_import"
+		"base", "contacts", "project", "base_import", "helpdesk_mgmt", "stock"
 	],
 
 	'description': """
@@ -37,6 +37,8 @@
 		'views/partner_view.xml',
 		'views/project_view.xml',
 		'views/activity_view.xml',
+		'views/helpdesk.xml',
+		'views/stock_lot_view.xml',
 		'wizard/wizard_view.xml',
 
 		'security/ir.model.access.csv',

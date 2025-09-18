@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        
+        <!-- Stock Lot Form View Extension -->
+        <record id="view_stock_lot_form_dbm" model="ir.ui.view">
+            <field name="name">stock.lot.form.dbm</field>
+            <field name="model">stock.lot</field>
+            <field name="inherit_id" ref="stock.view_production_lot_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//group[@name='main_group']" position="after">
+                    <!-- DBM Custom Fields -->
+                    <group> 
+                        <group string="Informazioni DBM">
+                            <field name="manufacturer_lot"/>
+                            <field name="customer_lot"/>
+                            <field name="rental_company_id"/>
+                            <field name="testing_status"/>
+                        </group>
+                        <group string="Garanzie">
+                            <field name="labor_warranty"/>
+                            <field name="parts_warranty"/>
+                            <field name="onsite_warranty"/>
+                        </group>
+                    </group>
+                    <hr/>
+                </xpath>
+            </field>
+        </record>
+
+    </data>
+</odoo>

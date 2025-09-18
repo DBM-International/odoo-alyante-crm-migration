@@ -64,11 +64,11 @@ class ProjectTask(models.Model):
         index=True
     )
     
-    company_id = fields.Many2one(
+    partner_ref_id = fields.Many2one(
         'res.partner',
-        string="Azienda",
-        domain="[('is_company', '=', True)]",
-        help="Azienda cliente"
+        string="Cliente",
+        help="Cliente",
+        domain="[('is_company', '=', False)]"
     )
 
     planned_date_start = fields.Datetime(string="Data pianificata")
