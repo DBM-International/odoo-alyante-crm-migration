@@ -85,7 +85,7 @@
             <field name="inherit_id" ref="project.view_task_form2"/>
             <field name="arch" type="xml">
                 <xpath expr="//form/sheet/group/group/field[@name='partner_id']" position="after">
-                    <field name="partner_id" invisible="project_id"/>
+                    <field name="partner_id" />
                     <field name="partner_ref_id" string="Referente"/>
                 </xpath>
             </field>
