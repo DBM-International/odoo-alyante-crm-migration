@@ -31,3 +31,19 @@ class ResPartner(models.Model):
                         f"Partner with codice '{record.ref}' already exists. "
                         f"Please use a unique codice."
                     )
+    
+
+    def action_view_stock_lots_history(self):
+        action = {
+            'type': 'ir.actions.act_window',
+            'name': 'Lotti a Noleggio',
+            'res_model': 'stock.lot',
+            'view_mode': 'list,form',
+            'domain': [('rental_company_id', 'in', self.ids)],
+            'context': dict(self.env.context),
+        }
+        return action
+
+    
+
+    

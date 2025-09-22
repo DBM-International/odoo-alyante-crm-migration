@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <data>
-       
+        <record id="view_partner_form_inherit" model="ir.ui.view">
+            <field name="name">base.view_partner_form</field>
+            <field name="model">res.partner</field>
+            <field name="inherit_id" ref="base.view_partner_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//form/sheet/div[@name='button_box']" position="inside">
+                    <button name="action_view_stock_lots_history" string="Numeri di lotto/serie Storico" type="object" class="btn-primary" icon="fa-list"/>
+                </xpath>
+            </field>
+        </record>
     </data>
 </odoo>
