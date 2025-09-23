@@ -1809,6 +1809,15 @@ class DbmImportWizard(models.TransientModel):
                 notification_msg += f", Errori: {error_count}"
             
             self.env.cr.commit()
+
+
+            # user_ids è un campo many2many, la ricerca [('user_ids', '=', self.user_id.id)] è corretta per trovare i task dove l'utente è assegnato.
+            # Tuttavia, il write con [(3, self.user_id.id)] è corretto per rimuovere l'utente dalla relazione many2many.
+            # Per chiarezza e sicurezza, si può esplicitare la logica e aggiungere un controllo che self.user_id sia valorizzato.
+            if self.user_id:
+                tasks_with_user = self.env['project.task'].with_context(active_test=False).search([('user_ids', 'in', [self.user_id.id])])
+                if tasks_with_user:
+                    tasks_with_user.write({'user_ids': [(3, self.user_id.id)]})
             
             return {
                 'type': 'ir.actions.client',
@@ -2027,8 +2036,7 @@ class DbmImportWizard(models.TransientModel):
                 # Create new activity
                 _logger.info(f"Creating new activity with data: {activity_data}")
                 new_activity = self.env['project.task'].create(activity_data)
-                if self.user_id and new_activity.user_ids and len(new_activity.user_ids) > 1 and self.user_id.id in [i.id for i in new_activity.user_ids]:
-                    new_activity.user_ids = [(3, self.user_id.id)]
+                
                 _logger.info(f"Successfully created new activity: {activity_data.get('name')} (ID: {new_activity.id})")
                 
                 # Verify the activity was actually created
